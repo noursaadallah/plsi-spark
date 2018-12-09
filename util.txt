@@ -1,0 +1,11 @@
+### E step: compute q*(z;u,s) = p(z|u,s) = p(s|z) * p(z|u) / sum_z(p(s|z) * p(z|u))
+## we want ( (u,s,z) ; q* )
+## we have Psz = ( (s,z) ; p(s|z) )  and Pzu = ( (u,z) ; p(z|u) )
+## steps:
+# 1. q0 = ((u,s,z); q*) => (u,s,z)
+# 2. join q0 and Psz on s,z => (s,z) ; (u, p(s|z) ) => map => (s,z,u); p(s|z) 
+# 3. join q0 and Pzu on z,u => (z,u) ; (s, p(z|u) ) => map => (s,z,u); p(z|u)
+# 4. join 2 and 3 => (s,z,u); p(s|z)*p(z|u) => map => (s,u); ( z,p(s|z)*p(z|u) )
+# 5. map 4 => (s,u) ; p(s|z)*p(z|u) => reduceByKey =>  (s,u) ; sum_z( p(s|z)*p(z|u) )
+# 6. join 4 and 5 => (s,u) ; ( ( z,p(s|z)*p(z|u) ) , sum_z( p(s|z)*p(z|u) )
+#       map => (s,u,z) ; p(s|z)*p(z|u)/sum_z( p(s|z)*p(z|u)
