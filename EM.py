@@ -3,8 +3,10 @@ import pyspark
 from numpy import random
 
 sc = pyspark.SparkContext()
+ratings = sc.textFile("/home/noursaadallah/Desktop/big-data/project/ratings.csv" , use_unicode=False)
+
 # number of clusters
-nb_z = sc.broadcast(3)
+z = sc.broadcast(3)
 
 # A parser for extracting the userId and itemId columns
 def extract_us(line):
@@ -15,38 +17,35 @@ def extract_us(line):
 # add values of z to a (u,s) tuple
 def suffix_z(us):
     res = []
-    for z in range(nb_z.value):
-        res += [us+','+str(z)]
+    for i in range(z.value):
+        res += [us+','+str(i)]
     return(res)
 
 # split into train set and test set
 # when splitting the users and items in the test set must be in the train set
 # because testing on user ex50 that is not on the train set we won't have p(s|ex50)
-# parameters : @lamda: percentage of the test set size
-#               @seed: seed of the random() function
-def splitSet(ratings, lamda=0.2, seed=17):
+# @parameters : lamda: percentage of the test set size
+#              seed: seed of the random() function
+def splitSet(ratings, lamda=0.9, seed=17):
     train_test = ratings.randomSplit([1-lamda, lamda], seed=seed)
     train, test = train_test[0], train_test[1]
     trained_users = train.map(lambda x: x.split(',')[0] ).distinct()
     trained_items = train.map(lambda x: x.split(',')[1] ).distinct()
     #broadcast the trained users and items to keep a common reference among the nodes
-    trained_users = sc.broadcast(trained_users.collect()).value
-    trained_items = sc.broadcast(trained_items.collect()).value
+    trained_users_bc = sc.broadcast(trained_users.collect())
+    trained_items_bc = sc.broadcast(trained_items.collect())
     #keep only users and items that are trained
-    test = test.filter(lambda x: x.split(',')[0] in trained_users and x.split(',')[1] in trained_items)
+    test = test.filter(lambda x: x.split(',')[0] in trained_users_bc.value and x.split(',')[1] in trained_items_bc.value)
     return [train,test]
 
-ratings = sc.textFile("/home/noursaadallah/Desktop/big-data/project/ratings.csv")
 # remove header
 header = ratings.first()
 ratings = ratings.filter(lambda x: x != header )
 ratings = ratings.map(extract_us)
 train,test = splitSet(ratings)
 # broadcast the train set in order to have a common reference between nodes to computethe loglikelihood
-_train_ = sc.broadcast(train.collect())
-_train = _train_.value
-_N = train.count()
-N = sc.broadcast(_N).value
+train_bc = sc.broadcast(train.collect())
+N_bc = sc.broadcast(train.count())
 
 # create (k,v) tuples ((u,s,z), q*). q* is random
 # q* is not necessarily a normalized probability at first, 
@@ -58,7 +57,7 @@ q = train.flatMap(suffix_z).map(lambda usz : (usz, random.rand()))
 
 # minimal number of iterations of the EM algorithm
 # we have to fix this because of the evolution of the loglikelihood function 
-nb_iter = 10
+nb_iter = 3
 # loglikelihood values over the iterations
 loglikelihood = []
 
@@ -148,7 +147,6 @@ for k in range(nb_iter):
 
 # ( u,s; ( z,p(z|u)*p(s|z) ), sum_z(p(z|u)*p(s|z)) ) => ( u,s,z; p(z|u)*p(s|z) / sum_z(p(z|u)*p(s|z)) ) == ( u,s,z; q* )
     q = _q_.map(lambda x : ( x[0]+','+x[1][0][0], x[1][0][1]/x[1][1] ))
-    q.persist()
 
 ######################## Loglikelihood computation 
 ## we only maximise the probas existing in the training dataset by minimising the L function 
@@ -156,9 +154,11 @@ for k in range(nb_iter):
 # 1. Psu => filter => s,u in train : (u,s)
 # 2. (u,s ; p(s|u)) => (u,s ; log(p(s|u)))
 # 3. 2 => reduceByKey => sum_n => -1/N * sum_n
-    Psu = Psu.filter(lambda x: x[0] in _train)
+    
+    Psu = Psu.filter(lambda x: x[0] in train_bc.value)
     log_Psu = Psu.map(lambda x: np.log(x[1]) )
-    L = -log_Psu.reduce(lambda x,y: x+y) / N
+    L = -log_Psu.reduce(lambda x,y: x+y) / N_bc.value
     loglikelihood.append(L)
+    print L
 
 print loglikelihood

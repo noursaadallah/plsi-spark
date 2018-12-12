@@ -4,7 +4,7 @@ from numpy import random
 
 sc = pyspark.SparkContext()
 # number of clusters
-nb_z = sc.broadcast(3)
+z = sc.broadcast(3)
 
 # A parser for extracting the userId and itemId columns
 def extract_us(line):
@@ -15,8 +15,8 @@ def extract_us(line):
 # add values of z to a (u,s) tuple
 def suffix_z(us):
     res = []
-    for z in range(nb_z.value):
-        res += [us+','+str(z)]
+    for i in range(z.value):
+        res += [us+','+str(i)]
     return(res)
 
 ratings = sc.textFile("/home/noursaadallah/Desktop/big-data/project/ratings.csv")
@@ -31,7 +31,7 @@ ratings = ratings.map(extract_us)
 # Technically this is the first Expectation step where p(u|z) and p(s|z) are multinomial
 # but our q* has the following parameters : p(z|u) and p(s|z)
 # q* = p(z|u) * p(s|z) / sum_z( p(z|u) * p(s|z) )
-q0 = ratings.flatMap(suffix_z).map(lambda usz : (usz, random.rand())).persist()
+q = ratings.flatMap(suffix_z).map(lambda usz : (usz, random.rand())).persist()
 
 #################################### MapReducing the model ####################################
 # q*(z;u,s) = p(z|u,s) = ( N(z,s) / N(z) ) * ( p(z|u) / sum_z( N(z,s)/N(z) * p(z|u) ) )
@@ -44,7 +44,7 @@ q0 = ratings.flatMap(suffix_z).map(lambda usz : (usz, random.rand())).persist()
 
 # ((s,z) , N(s,z))
 # N(s,z) is the sum over users of q*
-Nsz = q0.map(lambda x: ( x[0].split(',')[1] + ',' + x[0].split(',')[2] , x[1] ) ) \
+Nsz = q.map(lambda x: ( x[0].split(',')[1] + ',' + x[0].split(',')[2] , x[1] ) ) \
         .reduceByKey(lambda x,y : x+y).persist()
 
 # (z , N(z))
@@ -69,7 +69,7 @@ Psz = Nsz_Nz.map(lambda x: ( x[1][0][0]+','+x[0] , x[1][0][1] / x[1][1] ) )
  
 # ((u,z) , N(z,u))
 # N(z,u) is the sum over the items of q*
-Nzu = q0.map(lambda x: (x[0].split(',')[0]+','+x[0].split(',')[2],x[1])) \
+Nzu = q.map(lambda x: (x[0].split(',')[0]+','+x[0].split(',')[2],x[1])) \
         .reduceByKey(lambda x,y: x+y).persist()
 
 # u , N(u)
@@ -93,29 +93,44 @@ Pzu = Nzu_Nu.map(lambda x : ( x[0]+','+x[1][0][0] , x[1][0][1]/x[1][1]  )  )
 ## we have Psz = ( (s,z) ; p(s|z) )  and Pzu = ( (u,z) ; p(z|u) )
 
 # (u,s,z ; q*) --> (u,z ; s)
-_q0_ = q0.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[2] , x[0].split(',')[1])).persist()
+_q_ = q.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[2] , x[0].split(',')[1])).persist()
 
 # (u,z ; s) join (u,z ; p(z|u)) => (u,z ; (s,p(z|u)))
-_q0_ = _q0_.join(Pzu)
+_q_ = _q_.join(Pzu)
 
 # (u,z ; (s,p(z|u))) => (s,z;(u,p(z|u)))
-_q0_ = _q0_.map(lambda x : (x[1][0]+','+x[0].split(',')[1] , (x[0].split(',')[0],x[1][1])))
+_q_ = _q_.map(lambda x : (x[1][0]+','+x[0].split(',')[1] , (x[0].split(',')[0],x[1][1])))
 
 #( s,z;(u,p(z|u)) ) join (s,z; p(s|z) ) => ( s,z; (u,p(z|u),p(s|z)) )
-_q0_ = _q0_.join(Psz)
+_q_ = _q_.join(Psz)
 
 #( s,z; (u,p(z|u),p(s|z)) ) => ( u,s,z; p(z|u)*p(s|z) )
-_q0_ = _q0_.map(lambda x : ( x[1][0][0]+','+x[0],x[1][0][1]*x[1][1] ))
+_q_ = _q_.map(lambda x : ( x[1][0][0]+','+x[0],x[1][0][1]*x[1][1] ))
 
 #( u,s,z; p(z|u)*p(s|z) ) => ( u,s; sum_z(p(z|u)*p(s|z)) )
-sum_q0_ = _q0_.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[1],x[1])) \
+Psu = _q_.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[1],x[1])) \
         .reduceByKey(lambda x,y : x+y)
 
 #( u,s,z; p(z|u)*p(s|z) ) => ( u,s; (z,p(z|u)*p(s|z)) )
-_q0_ = _q0_.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[1],(x[0].split(',')[2],x[1])))
+_q_ = _q_.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[1],(x[0].split(',')[2],x[1])))
 
 # ( u,s; z,p(z|u)*p(s|z) ) join ( u,s; sum_z(p(z|u)*p(s|z)) ) => ( u,s; ( z,p(z|u)*p(s|z) ), sum_z(p(z|u)*p(s|z)) )
-_q0_ = _q0_.join(sum_q0_)
+_q_ = _q_.join(Psu)
 
 # ( u,s; ( z,p(z|u)*p(s|z) ), sum_z(p(z|u)*p(s|z)) ) => ( u,s,z; p(z|u)*p(s|z) / sum_z(p(z|u)*p(s|z)) ) == ( u,s,z; q* )
-q1 = _q0_.map(lambda x : ( x[0]+','+x[1][0][0], x[1][0][1]/x[1][1] ))
+q = _q_.map(lambda x : ( x[0]+','+x[1][0][0], x[1][0][1]/x[1][1] ))
+
+######################## Loglikelihood computation 
+## we only maximise the probas existing in the training dataset by minimising the L function 
+# L = -1/N sum_n( log(p(s|u)) )
+# 1. Psu => filter => s,u in train : (u,s)
+# 2. (u,s ; p(s|u)) => (u,s ; log(p(s|u)))
+# 3. 2 => reduceByKey => sum_n => -1/N * sum_n
+
+ratings_bc = sc.broadcast(ratings.collect())
+N = sc.broadcast(ratings.count())
+Psu = Psu.filter(lambda x: x[0] in ratings_bc.value)
+log_Psu = Psu.map(lambda x: np.log(x[1]) )
+L = -log_Psu.reduce(lambda x,y: x+y) / N.value
+
+print L
