@@ -24,8 +24,6 @@ def splitSet(ratings, lamda=0.2, seed=17):
     return [train,test]
 
 sc = pyspark.SparkContext()
-# number of clusters
-nb_z = sc.broadcast(3)
 
 ratings = sc.textFile("/home/noursaadallah/Desktop/big-data/project/ratings.csv")
 # remove header

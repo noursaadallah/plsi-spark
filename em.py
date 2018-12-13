@@ -1,3 +1,4 @@
+# One manual iteration of EM 
 import numpy as np 
 import pyspark
 from numpy import random

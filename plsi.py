@@ -121,7 +121,7 @@ for k in range(nb_iter):
 ## we want ( (u,s,z) ; q* )
 ## we have Psz = ( (s,z) ; p(s|z) )  and Pzu = ( (u,z) ; p(z|u) )
 
-# (u,s,z ; q*) --> (u,z ; s)
+# (u,s,z ; q*) => (u,z ; s)
     _q_ = q.map(lambda x : (x[0].split(',')[0]+','+x[0].split(',')[2] , x[0].split(',')[1])).persist()
 
 # (u,z ; s) join (u,z ; p(z|u)) => (u,z ; (s,p(z|u)))
