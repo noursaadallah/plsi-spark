@@ -3,15 +3,41 @@ import pyspark
 from numpy import random
 
 sc = pyspark.SparkContext()
+ratings = sc.textFile("file:///home/noursaadallah/Desktop/big-data/project/ratings.csv")
+
+# split into train set and test set
+# when splitting, the users and items in the test set must be in the train set
+# because testing on user u50 that is not on the train set we won't have p(s|u50)
+# parameters : @lamda: percentage of the test set size
+#               @seed: seed of the random() function
+def splitSet(ratings, lamda=0.3, seed=17):
+    train_test = ratings.randomSplit([1-lamda, lamda], seed=seed)
+    train, test = train_test[0], train_test[1]
+
+    #distinct trained users and items
+    trained_users = train.map(lambda x: x.split(',')[0] ).distinct().collect()
+    trained_items = train.map(lambda x: x.split(',')[1] ).distinct().collect()
+
+    #keep only users and items that are trained
+    test = test.filter(lambda x: x.split(',')[0] in trained_users and x.split(',')[1] in trained_items)
+    return [train,test]
+
 # number of clusters i.e. latent classes
-z = sc.broadcast(20)
+# according to the docs there is 19 film genres
+z = sc.broadcast(5)
 # generate clusters as an rdd | z as string
 z_clusters = sc.parallelize(range(z.value)).map(lambda x: str(x))
 
-ratings = sc.textFile("file:///home/noursaadallah/Desktop/big-data/project/ratings.csv")
 # remove header
 header = ratings.first()
 ratings = ratings.filter(lambda x: x!= header)
+
+#take only a sample of the dataset
+ratings = ratings.sample(False, 0.1)
+
+# split into train set and test set
+train,test = splitSet(ratings)
+ratings = train
 
 # (u,s,r,t) => ((u,s);1)
 ratings = ratings.map(lambda x: (x.split(',')[0]+','+x.split(',')[1] , 1) )
@@ -41,12 +67,12 @@ nb_p = q.getNumPartitions()
 # array of objective function values to be plotted afterwards
 LLs = []
 # epsilon: error threshold
-epsilon_bc = sc.broadcast(0.000001)
+epsilon_bc = sc.broadcast(0.00001)
 epsilon = epsilon_bc.value
 #################################### MapReducing the model ####################################
 # q*(z;u,s) = p(z|u,s) = ( N(z,s) / N(z) ) * ( p(z|u) / sum_z( N(z,s)/N(z) * p(z|u) ) )
 
-for k in range(25): #defining a maximum number of iterations
+for k in range(20): #defining a maximum number of iterations
 	q.persist()
 
 ######################## M step : compute p(s|z) and p(z|u)
@@ -143,6 +169,39 @@ for k in range(25): #defining a maximum number of iterations
 	L = -log_Psu.reduce(lambda x,y: x+y) / N
 	LLs.append(L)
 	if k>1 and LLs[k-1] - LLs[k] < epsilon:
-		np.savetxt("psu-r" , Psu_r.collect() )
 		break
-np.savetxt("loglikelihood", LLs)
+
+## Now test the result : Psu_r are the P(s|u) => compare to test set
+# u,s ; (psu , r)
+psu = Psu_r
+
+# ones are the observed tuples in the train
+ones = psu.filter(lambda x: x[1][1] == 1 )
+# zeroes are unobserved in the train
+zeroes = psu.filter(lambda x: x[1][1] == 0 )
+
+ones_count = ones.count()
+zeroes_count = zeroes.count()
+
+# expected : ones_mean > zeroes_mean
+ones_mean = ones.map(lambda x: x[1][0]).reduce(lambda x,y: x+y) / ones_count
+zeroes_mean = zeroes.map(lambda x: x[1][0]).reduce(lambda x,y: x+y) / zeroes_count
+
+# the threshold is the mean of the observed tuples
+threshold = ones_mean
+# we recommand movies to users when p(s|u)>= threshold
+recommended = zeroes.filter(lambda x: x[1][0] >= threshold )
+recommended_count = recommended.count()
+
+# u,s,r,t => u,s
+test = test.map(lambda x: x.split(',')[0]+','+x.split(',')[1] )
+# we must collect to filter the correctly recommended tuples
+_test = test.collect()
+recommended_correct = recommended.filter(lambda x: x[0] in _test )
+print 'correctly recommended count : ' + str(recommended_correct.count())
+print 'recommended count : ' + str(recommended_count)
+print 'test set count : ' + str(test.count() )
+
+############# Evaluating the recommender system
+#### 1st method : precision / recall and F2
+#### 2nd method : how many of the top N recommendations were correct

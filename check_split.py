@@ -5,11 +5,11 @@ from numpy import random
 ########################################## Check if the splitSet function behaves properly ##########################################
 
 # split into train set and test set
-# when splitting the users and items in the test set must be in the train set
-# because testing on user ex50 that is not on the train set we won't have p(s|ex50)
+# when splitting, the users and items in the test set must be in the train set
+# because testing on user u50 that is not on the train set we won't have p(s|u50)
 # parameters : @lamda: percentage of the test set size
 #               @seed: seed of the random() function
-def splitSet(ratings, lamda=0.2, seed=17):
+def splitSet(ratings, lamda=0.3, seed=17):
     train_test = ratings.randomSplit([1-lamda, lamda], seed=seed)
     train, test = train_test[0], train_test[1]
     #broadcast the trained users and items to keep a common reference among the nodes
