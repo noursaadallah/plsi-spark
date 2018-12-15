@@ -32,7 +32,7 @@ z_clusters = sc.parallelize(range(z.value)).map(lambda x: str(x))
 header = ratings.first()
 ratings = ratings.filter(lambda x: x!= header)
 
-#take only a sample of the dataset
+#take only a sample of the dataset because of performance issues
 ratings = ratings.sample(False, 0.1)
 
 # split into train set and test set
@@ -72,10 +72,10 @@ epsilon = epsilon_bc.value
 #################################### MapReducing the model ####################################
 # q*(z;u,s) = p(z|u,s) = ( N(z,s) / N(z) ) * ( p(z|u) / sum_z( N(z,s)/N(z) * p(z|u) ) )
 
-for k in range(20): #defining a maximum number of iterations
+for i in range(20): #defining a maximum number of iterations
 	q.persist()
 
-######################## M step : compute p(s|z) and p(z|u)
+######################## M step : compute p(s|z) and p(z|u) ########################
 ############ p(s|z) :
 # start by computing N(z,s) = sum_u( q*(z;u,s) )
 # then N(z) = sum_u_z (q*) = sum_z( N(z,s) )
@@ -123,7 +123,8 @@ for k in range(20): #defining a maximum number of iterations
 # ( (u,z) ; p(z|u) ) # p(z|u) = N(z,u)/N(u)
 	Pzu = Nzu_Nu.map(lambda x : ( x[0]+','+x[1][0][0] , x[1][0][1]/x[1][1]  )  )
 
-######################## E step : compute q*(z;u,s) = p(z|u,s) = p(s|z) * p(z|u) / sum_z(p(s|z) * p(z|u))
+############################# E step : compute q*(z;u,s) ############################# 
+# q* = p(z|u,s) = p(s|z) * p(z|u) / sum_z(p(s|z) * p(z|u))
 ## we want ( (u,s,z) ; q* )
 ## we have Psz = ( (s,z) ; p(s|z) )  and Pzu = ( (u,z) ; p(z|u) )
 
@@ -155,7 +156,7 @@ for k in range(20): #defining a maximum number of iterations
 # ( u,s; ( z,p(z|u)*p(s|z) ), sum_z(p(z|u)*p(s|z)) ) => ( u,s,z; p(z|u)*p(s|z) / sum_z(p(z|u)*p(s|z)) ) == ( u,s,z; q* )
 	q = _q_.map(lambda x : ( x[0]+','+x[1][0][0], x[1][0][1]/x[1][1] ))
 
-######################## Loglikelihood computation 
+################################## Loglikelihood computation ################################## 
 ## we only maximise the probas observed in the dataset by minimising the L function (i.e (u,s) tuples such that r=1 ) 
 # L = -1/N sum_n( log(p(s|u)) )
 
@@ -168,40 +169,60 @@ for k in range(20): #defining a maximum number of iterations
 # reduce => sum_n (log(psu))
 	L = -log_Psu.reduce(lambda x,y: x+y) / N
 	LLs.append(L)
-	if k>1 and LLs[k-1] - LLs[k] < epsilon:
+	if i>1 and LLs[i-1] - LLs[i] < epsilon:
 		break
 
+######################################## Results ########################################  
 ## Now test the result : Psu_r are the P(s|u) => compare to test set
 # u,s ; (psu , r)
 psu = Psu_r
 
 # ones are the observed tuples in the train
 ones = psu.filter(lambda x: x[1][1] == 1 )
-# zeroes are unobserved in the train
+# zeroes are unobserved in the train => the recommendations will be tested on this rdd
 zeroes = psu.filter(lambda x: x[1][1] == 0 )
 
+# define the threshold as the mean of observed tuples probabilities
 ones_count = ones.count()
-zeroes_count = zeroes.count()
-
-# expected : ones_mean > zeroes_mean
 ones_mean = ones.map(lambda x: x[1][0]).reduce(lambda x,y: x+y) / ones_count
-zeroes_mean = zeroes.map(lambda x: x[1][0]).reduce(lambda x,y: x+y) / zeroes_count
+threshold = 1.1 * ones_mean
 
-# the threshold is the mean of the observed tuples
-threshold = ones_mean
-# we recommand movies to users when p(s|u)>= threshold
-recommended = zeroes.filter(lambda x: x[1][0] >= threshold )
-recommended_count = recommended.count()
+# we recommend movies to users when p(s|u)>= threshold
+positives = zeroes.filter(lambda x: x[1][0] >= threshold )
+negatives = zeroes.filter(lambda x: x[1][0] < threshold )
 
 # u,s,r,t => u,s
 test = test.map(lambda x: x.split(',')[0]+','+x.split(',')[1] )
 # we must collect to filter the correctly recommended tuples
 _test = test.collect()
-recommended_correct = recommended.filter(lambda x: x[0] in _test )
-print 'correctly recommended count : ' + str(recommended_correct.count())
-print 'recommended count : ' + str(recommended_count)
-print 'test set count : ' + str(test.count() )
 
-############# Evaluating the recommender system
-#### 1st method : precision / recall and F2
-#### 2nd method : how many of the top N recommendations were correct
+true_positives = positives.filter(lambda x: x[0] in _test )
+false_positives = positives.subtractByKey(true_positives)
+true_negatives = negatives.filter(lambda x: x[0] not in _test)
+false_negatives = negatives.subtractByKey(true_negatives)
+
+TP = true_positives.count()
+FP = false_positives.count()
+TN = true_negatives.count()
+FN = false_negatives.count()
+
+print 'TP : ' , TP
+print 'FP : ' , FP
+print 'TN : ' , TN
+print 'FN : ' , FN
+
+############# Evaluating the recommender system : accuracy, precision, recall and F score
+
+# Accuracy = TP+TN/TP+FP+FN+TN
+accuracy = (TP+TN)/float(TP+FP+FN+TN)
+# Precision = TP/TP+FP
+precision = TP/float(TP+FP)
+#Recall = TP/TP+FN
+recall = TP/float(TP+FN)
+#F-Score = 2*(Recall * Precision) / (Recall + Precision)
+f1 = 2*(recall * precision) / float(recall + precision)
+
+print 'Accuracy : ' , accuracy
+print 'Precision : ' , precision
+print 'Recall : ' , recall
+print 'F-score : ' , f1

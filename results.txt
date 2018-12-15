@@ -1,0 +1,15 @@
+results with the following @parameters :
+    lamda = 0.4
+    z = 10
+    dataset = 20k
+    epsilon = 0.00001
+    threshold = mean( p( train_tuples ) )
+
+    TP :  3461                                                                      
+    FP :  1195052
+    TN :  1180652
+    FN :  3260
+    Accuracy :  0.497020053097
+    Precision :  0.00288774506409
+    Recall :  0.514953131974
+    F1-score :  0.00574328304711
