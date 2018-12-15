@@ -24,7 +24,7 @@ def splitSet(ratings, lamda=0.3, seed=17):
 
 # number of clusters i.e. latent classes
 # according to the docs there is 19 film genres
-z = sc.broadcast(5)
+z = sc.broadcast(10)
 # generate clusters as an rdd | z as string
 z_clusters = sc.parallelize(range(z.value)).map(lambda x: str(x))
 
@@ -33,7 +33,7 @@ header = ratings.first()
 ratings = ratings.filter(lambda x: x!= header)
 
 #take only a sample of the dataset because of performance issues
-ratings = ratings.sample(False, 0.1)
+ratings = ratings.sample(False, 0.2)
 
 # split into train set and test set
 train,test = splitSet(ratings)
@@ -185,7 +185,7 @@ zeroes = psu.filter(lambda x: x[1][1] == 0 )
 # define the threshold as the mean of observed tuples probabilities
 ones_count = ones.count()
 ones_mean = ones.map(lambda x: x[1][0]).reduce(lambda x,y: x+y) / ones_count
-threshold = 1.1 * ones_mean
+threshold = ones_mean
 
 # we recommend movies to users when p(s|u)>= threshold
 positives = zeroes.filter(lambda x: x[1][0] >= threshold )
